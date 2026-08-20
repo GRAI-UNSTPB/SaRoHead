@@ -36,7 +36,7 @@
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `title` | `string` | The original news headline as published. |
-| `proc_title` | `string` | Entity-masked headline where Named Entities (people, locations, organizations, facilities) are replaced with generalized semantic tags (e.g. `[PERSON]`, `[GPE]`, `[ORGANIZATION]`, `[FACILITY]`, `[PRODUCT]`, `[EVENT]`) via `ro_core_news_lg`. |
+| `proc_title` | `string` | Entity-masked headline where Named Entities (people, locations, organizations, facilities) are replaced with generalized semantic tags (e.g. `[PERSON]`, `[GPE]`, `[ORGANIZATION]`, `[FACILITY]`, `[PRODUCT]`, `[EVENT]`, `[NAT_REL_POL]`, `[LOC]`) via `ro_core_news_lg`. |
 | `category` | `string` | Topic category (`social`, `politic`, or `sport`). |
 | `satiric` | `int64` | Binary ground-truth label: `0` (Regular news) or `1` (Satiric / Humorous news). |
 
