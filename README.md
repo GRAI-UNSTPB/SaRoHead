@@ -1,82 +1,63 @@
 # SaRoHead: Detecting Satire in a Multi-Domain Romanian News Headline Dataset
 
-[![Hugging Face Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Dataset-blue)](https://huggingface.co/datasets/GRAI-UNSTPB/sarohead)
+[![Hugging Face Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Dataset-blue)](https://huggingface.co/datasets/GRAI-UNSTPB/SaRoHead)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-
-Official repository containing the code, experimental setups, and benchmark dataset for the paper:  
-**"SaRoHead: Detecting Satire in a Multi-Domain Romanian News Headline Dataset"**.
-
----
 
 ## Abstract
 
 > The primary goal of a news headline is to summarize an event in as few words as possible. Depending on the media outlet, a headline can serve as a means to objectively deliver a summary or improve its visibility. For the latter, specific publications may employ stylistic approaches that incorporate the use of sarcasm, irony, and exaggeration, key elements of a satirical approach. As such, even the headline must reflect the tone of the satirical main content. Current approaches for the Romanian language tend to detect the non-conventional tone (i.e., satire and clickbait) of the news content by combining both the main article and the headline. Because we consider a headline to be merely a brief summary of the main article, we investigate in this paper the presence of satirical tone in headlines alone, testing multiple baselines ranging from standard machine learning algorithms to deep learning models. Our experiments show that Bidirectional Transformer models outperform both standard machine-learning approaches and Large Language Models (LLMs), particularly when the meta-learning Reptile approach is employed.
 
----
-
-## Repository Structure
-
-```text
-.
-├── data/                       # Dataset splits (train.csv, validation.csv, test.csv)
-├── bert_scripts/               # BERT, XLM-RoBERTa, and DistilBERT training & evaluation
-│   ├── bert_models.py          # PyTorch Lightning module for BERT classifiers
-│   ├── train_BERT_satire.py    # Fine-tuning on domain categories (Social, Politics, Sports)
-│   ├── make_predictions_satire.py # Evaluation & metric computation
-│   └── job_BERT.sh             # SLURM execution script
-├── LLM_scripts/                # Large Language Model experiments
-│   ├── new_lora_finetune.py    # LoRA fine-tuning for RoLlama2, RoLlama3, RoGemma, RoMistral
-│   ├── few_shot_LLM_classif.py # Few-shot inference via structured outputs
-│   ├── test_lora.py            # Evaluation of LoRA fine-tuned LLMs
-│   └── job_lora.sh             # SLURM execution script
-├── reptile/                    # Meta-Learning & Interpretability
-│   ├── train_reptile.py        # Reptile meta-learning algorithm implementation
-│   ├── satire_results_reptile.py # Meta-learning evaluation across categories
-│   ├── interpret_model.py      # Model interpretability and error analysis
-│   └── job_reptile.sh          # SLURM execution script
-├── job_TTL.sh                  # Task Transfer Learning runner
-├── requirements.txt            # Core dependencies
-└── README.md
-```
-
----
-
 ## Dataset
 
-The **SaRoHead** dataset comprises **20,745 Romanian news headlines** spanning 2009 to June 2025 across three key domains: **Social**, **Politics**, and **Sports**.
+**SaRoHead** (**Sa**tirical **Ro**manian **Head**lines) is a multi-domain benchmark dataset for satire and sarcasm detection in Romanian news headlines across *social*, *politics*, and *sports* domains. It contains news headlines from various satirical and non-satirical news outlets. While gathering the data, we searched over category keywords from *TimesNewRoman*, *Antena 3*, and *Mediafax* explicitly, whereas *DCNews* did not categorize headlines explicitly. As a result, we looked for keywords relevant to each domain. For regular sports news headlines, we used the *sport.ro* news outlet. The corpus is diverse, comprising headlines spanning 2009 to 2025, with a cutoff date of June 2025. Ultimately, our dataset comprises 20,745 news headlines from publicly available Romanian news outlets. 
 
-### Dataset Splits
+### Dataset Statistics
 
-| Split | Regular (`0`) | Satiric (`1`) | Total Samples |
+- Language: Romanian (`ro`)
+- Total Samples: 20,745
+- Task: Binary Text Classification (Satire vs. Regular)
+- Domains: `social`, `politic`, `sport`
+- Time Span: 2009 - June 2025
+- Sources:
+    - Satire: `timesnewroman.ro`
+    - Mainstream / Non-Satiric: `dcnews.ro`, `mediafax.ro`, `antena3.ro`, `sport.ro`
+- Dataset splits:
+
+| Split | Regular (0) | Satiric (1) | Total Samples |
 | :--- | :---: | :---: | :---: |
 | **Train** | 7,775 | 7,745 | **15,520** |
 | **Validation** | 1,877 | 2,043 | **3,920** |
 | **Test** | 624 | 681 | **1,305** |
 | **Total** | **10,276** | **10,469** | **20,745** |
 
-### Data Fields
+### Dataset Fields
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `title` | `string` | The original raw news headline as published. |
-| `proc_title` | `string` | Entity-masked headline where Named Entities (`[PERSON]`, `[GPE]`, `[ORGANIZATION]`, `[FACILITY]`, `[PRODUCT]`, `[EVENT]`) are replaced using `ro_core_news_lg`. |
-| `category` | `string` | News domain topic (`social`, `politic`, or `sport`). |
-| `satiric` | `int64` | Ground-truth binary label: `0` (Regular news) or `1` (Satiric / Humorous news). |
+| `title` | `string` | The original news headline as published. |
+| `proc_title` | `string` | Entity-masked headline where Named Entities (people, locations, organizations, facilities) are replaced with generalized semantic tags (e.g. `[PERSON]`, `[GPE]`, `[ORGANIZATION]`, `[FACILITY]`, `[PRODUCT]`, `[EVENT]`) via `ro_core_news_lg`. |
+| `category` | `string` | Topic category (`social`, `politic`, or `sport`). |
+| `satiric` | `int64` | Binary ground-truth label: `0` (Regular news) or `1` (Satiric / Humorous news). |
 
-The dataset is also hosted on [Hugging Face](https://huggingface.co/datasets/GRAI-UNSTPB/sarohead):
+The dataset is also hosted on [Hugging Face](https://huggingface.co/datasets/GRAI-UNSTPB/SaRoHead):
 
 ```python
 from datasets import load_dataset
 
-dataset = load_dataset("GRAI-UNSTPB/sarohead")
+# Load SaRoHead dataset from Hugging Face
+dataset = load_dataset("GRAI-UNSTPB/SaRoHead")
+
+# Access splits
+train_set = dataset["train"]
+val_set = dataset["validation"]
+test_set = dataset["test"]
+
+# Example record
+print(train_set[0])
 ```
 
----
-
 ## Setup & Installation
-
-### 1. Environment Setup
 
 ```bash
 git clone https://github.com/GRAI-UNSTPB/SaRoHead.git
@@ -93,11 +74,9 @@ pip install -r requirements.txt
 python -m spacy download ro_core_news_lg
 ```
 
----
-
 ## Reproducing Experiments
 
-### 1. Transformer Models (BERT, XLM-RoBERTa, DistilBERT)
+### Transformer Models (BERT, XLM-RoBERTa, DistilBERT)
 
 Train Transformer models on each news domain:
 
@@ -113,11 +92,10 @@ python make_predictions_satire.py
 
 Supported `--model_type` values: `bert`, `xlm-roberta`, `distilled-bert`.
 
----
-
-### 2. LLM Experiments (LoRA Fine-Tuning & Few-Shot)
+### LLM Experiments (LoRA Fine-Tuning & Few-Shot)
 
 #### LoRA Fine-Tuning:
+
 ```bash
 cd LLM_scripts
 
@@ -131,14 +109,13 @@ python test_lora.py --model_name llama3 --category all
 Supported LLMs: `llama2` (`RoLlama2-7b`), `llama3` (`RoLlama3-8b`), `gemma` (`RoGemma-7b`), `mistral` (`RoMistral-7b`).
 
 #### Few-Shot Evaluation (vLLM):
+
 ```bash
 pip install vllm
 python few_shot_LLM_classif.py --model_type llama3 --n_examples 5
 ```
 
----
-
-### 3. Meta-Learning (Reptile)
+### Meta-Learning (Reptile)
 
 Train and evaluate using the Reptile meta-learning algorithm:
 
@@ -152,24 +129,7 @@ python train_reptile.py --model_type bert --train_style sequential --K 7
 python satire_results_reptile.py --model_type bert
 ```
 
----
-
-## Citation
-
-If you find this dataset or codebase useful in your research, please cite our paper:
-
-```bibtex
-@article{sarohead2026,
-  title={SaRoHead: Detecting Satire in a Multi-Domain Romanian News Headline Dataset},
-  author={Your Name and Collaborators},
-  year={2026},
-  publisher={GitHub / Hugging Face}
-}
-```
-
----
-
 ## License
 
 - **Code:** Distributed under the [MIT License](LICENSE).
-- **Dataset:** Distributed under the [Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/) license.
+- **Dataset:** Distributed under the [Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/) license. Note that the original titles remain under the copyright of their respective authors and are permitted for academic use only.
