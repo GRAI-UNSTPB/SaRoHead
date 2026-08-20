@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ML Checkpoints and Models
+*.ckpt
+*.pt
+*.bin
+*.safetensors
+*_satire_from_*
+check_*
+backup*/
+
+# Experiment loggers
+.aim/
+wandb/
+*.out
+*.err
+*.log
