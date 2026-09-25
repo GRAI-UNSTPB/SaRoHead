@@ -1,211 +1,124 @@
 import argparse
-import logging
+import sys
+from pathlib import Path
 
-import pandas as pd
 import torch
-from new_lora_finetune import build_chat
+from new_lora_finetune import (
+    MODEL_NAMES,
+    PAPER_NAMES,
+    SYSTEM_PROMPT,
+    adapter_dir,
+    user_prompt,
+)
 from peft import PeftModel
-from torch.utils.data import DataLoader, Dataset
-from torchmetrics import functional
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from analysis_scripts.prediction_io import read_split, source_column, write_predictions
 
 torch.backends.cuda.enable_cudnn_sdp(False)
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 
 
-class HeadlineDataset(Dataset):
-    def __init__(self, category, df_name, tokenizer):
-        self.df = pd.read_csv(df_name)
-        if category != "all":
-            self.df = self.df[self.df["category"] == category]
-        title_col = (
-            "proc_title"
-            if "proc_title" in self.df.columns
-            else ("new_title" if "new_title" in self.df.columns else "title")
-        )
-        self.titles = self.df[title_col].to_list()
-        self.labels_binary = self.df["satiric"].to_list()
-        self.labels = ["da" if label == 1 else "nu" for label in self.labels_binary]
-        self.tokenizer = tokenizer
-        self.list_size = len(self.labels)
+def build_prompt(tokenizer, title):
+    chat = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt(title)},
+    ]
+    return tokenizer.apply_chat_template(
+        chat, tokenize=False, add_generation_prompt=True
+    )
 
-    def __getitem__(self, idx):
-        example = self.df.iloc[idx, :].to_dict()
-        title_text = (
-            example.get("proc_title")
-            or example.get("new_title")
-            or example.get("title", "")
-        )
-        chat = [
-            {
-                "role": "system",
-                "content": "Ești un bun cunoscător al elementelor care definesc satira. Satira are ca scop ridiculizarea unor comportamente, tocmai de aceea se pot regăsi elemente de absurd, ironie, sarcasm.",
-            },
-            {
-                "role": "user",
-                "content": f"""Vei primi un titlu dintr-o știre și trebuie să spui dacă acesta este satiric, sau nu. 
-Vei răspunde numai cu 'da', sau 'nu', fără a mai fi necesare alte explicații.
-Observație: pentru a ține cont exclusiv de structura titlului, entitățile au fost ascunse. Nu cunoști articolul și în stabilirea verdictului te vei folosi exclusiv de titlu, fără a apela la cunoștințe externe.
-Titlu:{title_text}""",
-            },
+
+@torch.no_grad()
+def classify(model, tokenizer, titles, batch_size):
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    preds = []
+    for start in tqdm(range(0, len(titles), batch_size)):
+        prompts = [
+            build_prompt(tokenizer, t) for t in titles[start : start + batch_size]
         ]
-        return chat
-
-    def __len__(self):
-        return self.list_size
-
-
-df_dict = {
-    "category": [],
-    "model": [],
-    "satire recall": [],
-    "satire precision": [],
-    "satire F1": [],
-    "mainstream recall": [],
-    "mainstream precision": [],
-    "mainstream F1": [],
-    "test type": [],
-}
-
-
-def return_model_name(model_type):
-    model_name = ""
-    if model_type == "llama2":
-        model_name = "OpenLLM-Ro/RoLlama2-7b-Instruct"
-    elif model_type == "llama3":
-        model_name = "OpenLLM-Ro/RoLlama3-8b-Instruct"
-    elif model_type == "gemma":
-        model_name = "OpenLLM-Ro/RoGemma-7b-Instruct"
-    elif model_type == "mistral":
-        model_name = "OpenLLM-Ro/RoMistral-7b-Instruct"
-    return model_name
+        enc = tokenizer(
+            prompts, return_tensors="pt", padding=True, add_special_tokens=False
+        ).to(model.device)
+        out = model.generate(
+            **enc,
+            max_new_tokens=2,
+            min_new_tokens=1,
+            do_sample=False,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        generated = tokenizer.batch_decode(
+            out[:, enc["input_ids"].shape[1] :], skip_special_tokens=True
+        )
+        preds.extend(1 if g.strip().lower().startswith("da") else 0 for g in generated)
+    return preds
 
 
 def main():
-    metrics = ["NS_precision", "NS_recall", "S_precision", "S_recall"]
-    logging.basicConfig(
-        filename="lora_debug.log",
-        format="%(asctime)s: %(message)s",
-        level=logging.INFO,
-        filemode="w",
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", default="all")
+    parser.add_argument("--category", nargs="+", default=["all"])
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--data_dir", default="../data")
+    parser.add_argument("--split_family", default="random")
+    parser.add_argument("--eval_splits", nargs="+", default=["test"])
+    parser.add_argument("--variant_suffix", default="")
+    parser.add_argument("--adapter_tag", default=None)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--model_override", default=None)
+    parser.add_argument("--limit", type=int, default=None)
+    args = parser.parse_args()
+
+    set_seed(args.seed)
+    categories = (
+        ["social", "politic", "sport"]
+        if "all" in args.category
+        else list(args.category)
     )
-    logger = logging.getLogger(__name__)
-    arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--model_name", type=str)
-    arg_parser.add_argument("--category", type=str)
-    args = arg_parser.parse_args()
-    model_list, category_list = [], []
-    if args.category == "all":
-        category_list = ["social", "politic", "sport"]
-    else:
-        category_list = [args.category]
-    if args.model_name == "all":
-        model_list = ["llama2", "llama3", "gemma", "mistral"]
-    else:
-        model_list = [args.model_name]
+    models = list(MODEL_NAMES) if args.model_name == "all" else [args.model_name]
+    variant = "lora" + (f"__{args.variant_suffix}" if args.variant_suffix else "")
 
-    for model_type in model_list:
-        model_name = return_model_name(model_type)
+    for model_type in models:
+        model_name = args.model_override or MODEL_NAMES[model_type]
         tokenizer = AutoTokenizer.from_pretrained(model_name)
+        device_map = "cuda" if torch.cuda.is_available() else "cpu"
         base_model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+            model_name, torch_dtype=torch.bfloat16, device_map=device_map
         )
-        for category in category_list:
-            print(f"Ongoing {category}")
-            wrapped_model = PeftModel.from_pretrained(
-                base_model, f"main_model_{model_type}_{category}", is_trainable=False
-            ).cuda()
-            wrapped_model.eval()
-            hf_pipeline = pipeline(
-                task="text-generation",
-                model=wrapped_model,
-                device="cuda",
-                batch_size=1,
-                tokenizer=tokenizer,
+        for category in categories:
+            adapter = adapter_dir(
+                model_type, category, args.adapter_tag or args.split_family, args.seed
             )
-
-            def collate_fn(batch):
-                chats = []
-                for chat in batch:
-                    chats.append(chat)
-                return chats
-
-            testData = HeadlineDataset(category, "../data/test.csv", tokenizer)
-            testLoader = DataLoader(
-                testData, batch_size=1, shuffle=False, collate_fn=collate_fn
-            )
-            to_loader_dict = {"test": [testLoader, testData]}
-
-            for name, loaders in to_loader_dict.items():
-                total_GT = loaders[1].labels_binary
-                total_preds = []
-                print(len(loaders[1]))
-                for batch in tqdm(loaders[0]):
-                    out = hf_pipeline(
-                        batch,
-                        return_full_text=False,
-                        min_new_tokens=1,
-                        max_new_tokens=2,
-                        do_sample=False,
-                    )
-                    """out = wrapped_model.generate(input_ids=input_ids,
-                                                do_sample=False,
-                                                max_new_tokens=1)
-                    logger.info(tokenizer.decode(out[0],skip_special_tokens=True))
-                    prediction=tokenizer.decode(out[0],skip_special_tokens=False).strip()"""
-                    print(out)
-                    out = out[0][0]["generated_text"]
-                    # print(out)
-                    if out == "da":
-                        total_preds.append(1)
-                    else:
-                        total_preds.append(0)
-                total_GT = torch.tensor(total_GT)
-                total_preds = torch.tensor(total_preds)
-                df_dict["category"].append(category)
-                df_dict["model"].append(model_type)
-                df_dict["test type"].append(name)
-                df_dict["satire recall"].append(
-                    functional.classification.binary_recall(total_preds, total_GT)
-                    .round(decimals=4)
-                    .item()
+            print(f"Evaluating {adapter}")
+            model = PeftModel.from_pretrained(
+                base_model, adapter, is_trainable=False
+            ).eval()
+            for eval_split in args.eval_splits:
+                df = read_split(args.data_dir, eval_split, category)
+                if args.limit:
+                    df = df.head(args.limit)
+                titles = df["new_title"].fillna("").tolist()
+                preds = classify(model, tokenizer, titles, args.batch_size)
+                path = write_predictions(
+                    method="lora",
+                    model=PAPER_NAMES[model_type],
+                    variant=variant,
+                    category=category,
+                    seed=args.seed,
+                    split_family=args.split_family,
+                    eval_split=eval_split,
+                    titles=titles,
+                    ground_truth=df["satiric"].astype(int),
+                    prediction=preds,
+                    source=source_column(df),
                 )
-                df_dict["satire precision"].append(
-                    functional.classification.binary_precision(total_preds, total_GT)
-                    .round(decimals=4)
-                    .item()
-                )
-                df_dict["satire F1"].append(
-                    functional.classification.binary_f1_score(total_preds, total_GT)
-                    .round(decimals=4)
-                    .item()
-                )
-                df_dict["mainstream recall"].append(
-                    functional.classification.multiclass_recall(
-                        total_preds, total_GT, num_classes=2, average=None
-                    )[0]
-                    .round(decimals=4)
-                    .item()
-                )
-                df_dict["mainstream precision"].append(
-                    functional.classification.multiclass_precision(
-                        total_preds, total_GT, num_classes=2, average=None
-                    )[0]
-                    .round(decimals=4)
-                    .item()
-                )
-                df_dict["mainstream F1"].append(
-                    functional.classification.multiclass_f1_score(
-                        total_preds, total_GT, num_classes=2, average=None
-                    )[0]
-                    .round(decimals=4)
-                    .item()
-                )
-
-    df = pd.DataFrame.from_dict(df_dict)
-    df.to_csv("../results_classif/lora_results.csv", index=False, index_label=False)
+                print(f"wrote {path}")
+            model.unload()
 
 
 if __name__ == "__main__":

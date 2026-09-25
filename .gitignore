@@ -225,6 +225,15 @@ __marimo__/
 *_satire_from_*
 check_*
 backup*/
+bert_scripts/checkpoints/
+LLM_scripts/main_model_*/
+unsupervised_TTL/
+results/
+bert_scripts/logs/
+shap_scripts/results/
+shap_scripts/plots/
+topic_scripts/results/
+topic_scripts/plots/
 
 # Experiment loggers
 .aim/

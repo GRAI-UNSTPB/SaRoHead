@@ -11,7 +11,7 @@ class NeuralClassifier(nn.Module):
     def __init__(self, model_name, num_labels, full_finetune=False):
         super().__init__()
         self.backbone_model = AutoModel.from_pretrained(
-            model_name, torch_dtype=torch.bfloat16, device_map="cuda"
+            model_name, torch_dtype=torch.bfloat16
         )
         if full_finetune == False:
             for param in self.backbone_model.parameters():
@@ -26,6 +26,8 @@ class NeuralClassifier(nn.Module):
         )
         last_hidden_state = out.last_hidden_state
         CLS_embeddings = last_hidden_state[:, 0, :]
+        if self.linear_layer.weight.device != CLS_embeddings.device:
+            self.linear_layer = self.linear_layer.to(CLS_embeddings.device)
         raw_logits = self.linear_layer(CLS_embeddings)
         return raw_logits
 
@@ -43,7 +45,7 @@ class BERTmodule(pl.LightningModule):
         full_finetune=False,
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["tokenizer"])
         self.neural_classifier = NeuralClassifier(model_name, num_labels, full_finetune)
         self.neural_classifier.train()
         self.tokenizer = tokenizer
